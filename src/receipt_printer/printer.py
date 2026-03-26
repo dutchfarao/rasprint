@@ -11,13 +11,12 @@ from typing import Generator
 import serial
 from escpos.printer import Serial
 
+from receipt_printer import config
+
 logger = logging.getLogger(__name__)
 
-DEVICE = "/dev/rfcomm0"
-WIDTH = 48
 
-
-def verify_connection(device: str = DEVICE) -> bool:
+def verify_connection(device: str = config.BLUETOOTH_DEVICE) -> bool:
     """Return True if the RFCOMM serial device exists and is responsive."""
     if not os.path.exists(device):
         return False
@@ -39,7 +38,7 @@ def verify_connection(device: str = DEVICE) -> bool:
 
 
 @contextmanager
-def open_printer(device: str = DEVICE) -> Generator[Serial, None, None]:
+def open_printer(device: str = config.BLUETOOTH_DEVICE) -> Generator[Serial, None, None]:
     """Open and yield an ESC/POS Serial printer instance."""
     p = Serial(devfile=device, baudrate=9600, timeout=2)
     try:
@@ -54,37 +53,43 @@ def open_printer(device: str = DEVICE) -> Generator[Serial, None, None]:
 def print_separator(p: Serial) -> None:
     """Print a full-width dashed separator line."""
     p.set(align="left", bold=False)
-    p.text("-" * WIDTH + "\n")
+    p.text("-" * config.PAPER_WIDTH + "\n")
 
 
 def print_centred(p: Serial, text: str) -> None:
-    """Print text centred within WIDTH characters then reset to left-align."""
+    """Print text centred within PAPER_WIDTH characters then reset to left-align."""
     p.set(align="center", bold=False)
     p.text(text + "\n")
     p.set(align="left", bold=False)
 
 
-def print_wrapped(p: Serial, text: str, width: int = WIDTH) -> None:
+def print_wrapped(p: Serial, text: str, width: int = config.PAPER_WIDTH) -> None:
     """Print text word-wrapped at width characters, preserving newlines."""
     for line in text.splitlines():
         for segment in textwrap.wrap(line, width) or [""]:
             p.text(segment + "\n")
 
 
-def print_message(message: str, device: str = DEVICE) -> None:
-    """Print an on-demand message with a decorative header and footer."""
+def print_message(
+    message: str,
+    device: str = config.BLUETOOTH_DEVICE,
+    with_header: bool = True,
+) -> None:
+    """Print an on-demand message, optionally with a decorative header and footer."""
     with open_printer(device) as p:
         p.ln(2)
-        print_separator(p)
-        print_centred(p, "[ MESSAGE FROM RASPUTIN ]")
-        print_separator(p)
-        p.ln(1)
+        if with_header:
+            print_separator(p)
+            print_centred(p, f"[ MESSAGE FROM {config.ASSISTANT_NAME} ]")
+            print_separator(p)
+            p.ln(1)
         p.set(align="center", bold=False)
         print_wrapped(p, message)
         p.set(align="left", bold=False)
         p.ln(1)
-        print_separator(p)
-        print_centred(p, "xxx")
-        print_separator(p)
+        if with_header:
+            print_separator(p)
+            print_centred(p, config.ASSISTANT_CLOSING)
+            print_separator(p)
         p.ln(4)
         p.cut()

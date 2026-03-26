@@ -11,12 +11,11 @@ from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from escpos.printer import Serial
 
-from receipt_printer import birthdays, ipc, news, printer, weather
+from receipt_printer import birthdays, config, ipc, news, printer, weather
 
 logger = logging.getLogger(__name__)
-
-TIMEZONE = "Europe/Amsterdam"
 
 HEADER_ART = """
 ██████╗  █████╗ ██╗  ██╗ █████╗
@@ -36,10 +35,6 @@ HEADER_ART = """
 LOGS_DIR = Path.home() / "receipt_printer" / "logs"
 MISSED_LOG = LOGS_DIR / "missed_prints.log"
 
-
-RETRY_ATTEMPTS = 3
-RETRY_DELAY_SECONDS = 15
-
 _print_lock = threading.Lock()
 
 
@@ -53,14 +48,14 @@ def _log_missed(reason: str = "printer unreachable") -> None:
         )
 
 
-def _print_section(p: object, title: str, content: str) -> None:
+def _print_section(p: Serial, title: str, content: str) -> None:
     """Print a titled section block with separators."""
-    printer.print_separator(p)  # type: ignore[arg-type]
-    p.set(bold=True, align="left")  # type: ignore[attr-defined]
-    p.text(f"{title}\n")  # type: ignore[attr-defined]
-    p.set(bold=False, align="left")  # type: ignore[attr-defined]
-    printer.print_separator(p)  # type: ignore[arg-type]
-    printer.print_wrapped(p, content)  # type: ignore[arg-type]
+    printer.print_separator(p)
+    p.set(bold=True, align="left")
+    p.text(f"{title}\n")
+    p.set(bold=False, align="left")
+    printer.print_separator(p)
+    printer.print_wrapped(p, content)
 
 
 def _do_print(now: datetime) -> None:
@@ -73,19 +68,19 @@ def _do_print(now: datetime) -> None:
         # --- Art header ---
         p.set(align="center", bold=False)
         for line in HEADER_ART.splitlines():
-            p.text(line.center(printer.WIDTH) + "\n")
+            p.text(line.center(config.PAPER_WIDTH) + "\n")
 
         # --- Header ---
         p.ln(1)
         printer.print_separator(p)
         p.set(bold=True, align="center")
-        p.text("GOOD MORNING!\n")
+        p.text(f"{config.MORNING_GREETING}\n")
         p.set(bold=False, align="center")
         p.text(now.strftime("%A, %d %B %Y  %H:%M") + "\n")
         printer.print_separator(p)
 
         # --- Weather ---
-        _print_section(p, "WEATHER - Maastricht", weather_text)
+        _print_section(p, f"WEATHER - {config.LOCATION_NAME}", weather_text)
 
         # --- News ---
         printer.print_separator(p)
@@ -97,7 +92,7 @@ def _do_print(now: datetime) -> None:
 
         # --- Footer ---
         printer.print_separator(p)
-        printer.print_centred(p, "Have a great day!")
+        printer.print_centred(p, config.FAREWELL)
         printer.print_separator(p)
         p.ln(4)
         p.cut()
@@ -106,13 +101,15 @@ def _do_print(now: datetime) -> None:
 def daily_print_job() -> None:
     """Print the daily morning receipt; retries on transient errors before giving up."""
     if not printer.verify_connection():
-        logger.warning("Printer not reachable at /dev/rfcomm0 — print job aborted.")
+        logger.warning(
+            "Printer not reachable at %s — print job aborted.", config.BLUETOOTH_DEVICE
+        )
         _log_missed()
         return
 
     now = datetime.now()
 
-    for attempt in range(1, RETRY_ATTEMPTS + 1):
+    for attempt in range(1, config.RETRY_ATTEMPTS + 1):
         try:
             with _print_lock:
                 _do_print(now)
@@ -120,14 +117,16 @@ def daily_print_job() -> None:
             return
         except Exception as exc:
             logger.warning(
-                "Print attempt %d/%d failed: %s", attempt, RETRY_ATTEMPTS, exc
+                "Print attempt %d/%d failed: %s", attempt, config.RETRY_ATTEMPTS, exc
             )
-            if attempt < RETRY_ATTEMPTS:
-                logger.info("Retrying in %d seconds…", RETRY_DELAY_SECONDS)
-                time.sleep(RETRY_DELAY_SECONDS)
+            if attempt < config.RETRY_ATTEMPTS:
+                logger.info("Retrying in %d seconds…", config.RETRY_DELAY_SECONDS)
+                time.sleep(config.RETRY_DELAY_SECONDS)
 
-    logger.error("All %d print attempts failed — logging as missed.", RETRY_ATTEMPTS)
-    _log_missed(reason=f"serial error after {RETRY_ATTEMPTS} attempts")
+    logger.error(
+        "All %d print attempts failed — logging as missed.", config.RETRY_ATTEMPTS
+    )
+    _log_missed(reason=f"serial error after {config.RETRY_ATTEMPTS} attempts")
 
 
 def _handle_connection(conn: socket.socket) -> None:
@@ -145,8 +144,9 @@ def _handle_connection(conn: socket.socket) -> None:
             conn.sendall(b"ERR:unknown command\n")
             return
         message = line[len("PRINT:"):]
+        with_header = not line.startswith("PRINT_RAW:")
         with _print_lock:
-            printer.print_message(message)
+            printer.print_message(message, with_header=with_header)
         conn.sendall(b"OK\n")
     except Exception as exc:
         logger.warning("IPC print request failed: %s", exc)
@@ -180,16 +180,25 @@ def _run_socket_server() -> None:
 
 
 def start_scheduler() -> None:
-    """Start the blocking scheduler running daily_print_job at 08:00 Amsterdam time."""
+    """Start the blocking scheduler running daily_print_job at the configured time."""
     socket_thread = threading.Thread(target=_run_socket_server, daemon=True)
     socket_thread.start()
 
-    scheduler = BlockingScheduler(timezone=TIMEZONE)
+    scheduler = BlockingScheduler(timezone=config.TIMEZONE)
     scheduler.add_job(
         daily_print_job,
-        trigger=CronTrigger(hour=8, minute=0, timezone=TIMEZONE),
+        trigger=CronTrigger(
+            hour=config.DAILY_PRINT_HOUR,
+            minute=config.DAILY_PRINT_MINUTE,
+            timezone=config.TIMEZONE,
+        ),
     )
-    logger.info("Scheduler started — daily print at 08:00 %s.", TIMEZONE)
+    logger.info(
+        "Scheduler started — daily print at %02d:%02d %s.",
+        config.DAILY_PRINT_HOUR,
+        config.DAILY_PRINT_MINUTE,
+        config.TIMEZONE,
+    )
     try:
         scheduler.start()
     finally:

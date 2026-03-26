@@ -6,7 +6,7 @@ import logging
 import os
 import sys
 
-from receipt_printer import ipc, printer, scheduler
+from receipt_printer import config, ipc, printer, scheduler
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -24,11 +24,11 @@ def _cmd_print(args: argparse.Namespace) -> None:
     # Daemon not running — print directly
     if not printer.verify_connection():
         print(
-            "ERROR: Printer not reachable at /dev/rfcomm0 — print job aborted.",
+            f"ERROR: Printer not reachable at {config.BLUETOOTH_DEVICE} — print job aborted.",
             file=sys.stderr,
         )
         sys.exit(1)
-    printer.print_message(args.message)
+    printer.print_message(args.message, with_header=not args.no_header)
 
 
 def _cmd_start_scheduler(_args: argparse.Namespace) -> None:
@@ -46,6 +46,9 @@ def main() -> None:
 
     print_cmd = subparsers.add_parser("print", help="Print an on-demand message")
     print_cmd.add_argument("message", help="Text to print (supports multi-line)")
+    print_cmd.add_argument(
+        "--no-header", action="store_true", help="Print without decorative header/footer"
+    )
     print_cmd.set_defaults(func=_cmd_print)
 
     sched_cmd = subparsers.add_parser(
