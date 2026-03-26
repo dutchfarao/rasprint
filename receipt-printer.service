@@ -1,0 +1,16 @@
+[Unit]
+Description=Receipt Printer Daily Morning Scheduler
+After=bluetooth.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dutchfarao
+WorkingDirectory=/home/dutchfarao/receipt_printer
+ExecStart=/home/dutchfarao/receipt_printer/.venv/bin/receipt-printer start-scheduler
+Restart=on-failure
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
