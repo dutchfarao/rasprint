@@ -7,7 +7,7 @@ SOCKET_PATH = "/tmp/receipt-printer.sock"
 _TIMEOUT = 30  # seconds — covers slow Bluetooth writes
 
 
-def send_print_request(message: str) -> None:
+def send_print_request(message: str, with_header: bool = True) -> None:
     """Send a print request to the running daemon and wait for acknowledgement.
 
     Raises RuntimeError if the daemon responds with an error or the connection
@@ -17,7 +17,8 @@ def send_print_request(message: str) -> None:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.settimeout(_TIMEOUT)
         sock.connect(SOCKET_PATH)
-        sock.sendall(f"PRINT:{message}\n".encode())
+        prefix = "PRINT:" if with_header else "PRINT_RAW:"
+        sock.sendall(f"{prefix}{message}\n".encode())
         response = b""
         while b"\n" not in response:
             chunk = sock.recv(256)

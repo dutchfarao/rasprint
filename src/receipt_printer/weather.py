@@ -1,4 +1,4 @@
-"""Open-Meteo weather fetching and receipt formatting for Maastricht."""
+"""Open-Meteo weather fetching and receipt formatting."""
 from __future__ import annotations
 
 import logging
@@ -6,10 +6,10 @@ from typing import Any
 
 import requests
 
+from receipt_printer import config
+
 logger = logging.getLogger(__name__)
 
-LAT = 50.8514
-LON = 5.6910
 URL = "https://api.open-meteo.com/v1/forecast"
 
 _WMO_DESCRIPTIONS: dict[int, str] = {
@@ -78,11 +78,11 @@ def fetch_weather() -> str:
         resp = requests.get(
             URL,
             params={
-                "latitude": LAT,
-                "longitude": LON,
+                "latitude": config.LATITUDE,
+                "longitude": config.LONGITUDE,
                 "current_weather": "true",
                 "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode",
-                "timezone": "Europe/Amsterdam",
+                "timezone": config.TIMEZONE,
             },
             timeout=10,
         )
