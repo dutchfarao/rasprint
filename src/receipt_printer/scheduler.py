@@ -58,12 +58,8 @@ def _print_section(p: Serial, title: str, content: str) -> None:
     printer.print_wrapped(p, content)
 
 
-def _do_print(now: datetime) -> None:
+def _do_print(now: datetime, weather_text: str, news_text: str, birthday_text: str) -> None:
     """Perform the actual print job; raises on any printer error."""
-    weather_text = weather.fetch_weather()
-    news_text = news.fetch_news()
-    birthday_text = birthdays.format_birthdays()
-
     with printer.open_printer() as p:
         # --- Art header ---
         p.set(align="center", bold=False)
@@ -83,11 +79,9 @@ def _do_print(now: datetime) -> None:
         _print_section(p, f"WEATHER - {config.LOCATION_NAME}", weather_text)
 
         # --- News ---
-        printer.print_separator(p)
         _print_section(p, "TOP NEWS", news_text)
 
         # --- Birthdays ---
-        printer.print_separator(p)
         _print_section(p, "BIRTHDAYS", birthday_text)
 
         # --- Footer ---
@@ -99,34 +93,41 @@ def _do_print(now: datetime) -> None:
 
 
 def daily_print_job() -> None:
-    """Print the daily morning receipt; retries on transient errors before giving up."""
-    if not printer.verify_connection():
-        logger.warning(
-            "Printer not reachable at %s — print job aborted.", config.BLUETOOTH_DEVICE
-        )
-        _log_missed()
-        return
-
+    """Print the daily morning receipt; retries connection failures before giving up."""
     now = datetime.now()
 
+    # Fetch data once, outside the retry loop — these handle their own exceptions
+    # and must not re-run on retry (stale data is fine; duplicate prints are not).
+    weather_text = weather.fetch_weather()
+    news_text = news.fetch_news()
+    birthday_text = birthdays.format_birthdays()
+
     for attempt in range(1, config.RETRY_ATTEMPTS + 1):
-        try:
-            with _print_lock:
-                _do_print(now)
-            logger.info("Daily print succeeded on attempt %d.", attempt)
-            return
-        except Exception as exc:
+        if not printer.verify_connection():
             logger.warning(
-                "Print attempt %d/%d failed: %s", attempt, config.RETRY_ATTEMPTS, exc
+                "Printer not reachable at %s (attempt %d/%d).",
+                config.BLUETOOTH_DEVICE, attempt, config.RETRY_ATTEMPTS,
             )
             if attempt < config.RETRY_ATTEMPTS:
                 logger.info("Retrying in %d seconds…", config.RETRY_DELAY_SECONDS)
                 time.sleep(config.RETRY_DELAY_SECONDS)
+                continue
+            _log_missed()
+            return
 
-    logger.error(
-        "All %d print attempts failed — logging as missed.", config.RETRY_ATTEMPTS
-    )
-    _log_missed(reason=f"serial error after {config.RETRY_ATTEMPTS} attempts")
+        try:
+            with _print_lock:
+                _do_print(now, weather_text, news_text, birthday_text)
+            logger.info("Daily print succeeded on attempt %d.", attempt)
+            return
+        except Exception as exc:
+            # Do NOT retry after printing has started — ESC/POS data already sent
+            # to the printer cannot be recalled; retrying would duplicate the output.
+            logger.error("Print failed on attempt %d: %s — aborting to avoid duplicates.", attempt, exc)
+            _log_missed(reason=f"print error: {exc}")
+            return
+
+    _log_missed(reason="printer unreachable after all attempts")
 
 
 def _handle_connection(conn: socket.socket) -> None:
@@ -140,11 +141,15 @@ def _handle_connection(conn: socket.socket) -> None:
                 return
             data += chunk
         line = data.decode().strip()
-        if not line.startswith("PRINT:"):
+        if line.startswith("PRINT_RAW:"):
+            message = line[len("PRINT_RAW:"):]
+            with_header = False
+        elif line.startswith("PRINT:"):
+            message = line[len("PRINT:"):]
+            with_header = True
+        else:
             conn.sendall(b"ERR:unknown command\n")
             return
-        message = line[len("PRINT:"):]
-        with_header = not line.startswith("PRINT_RAW:")
         with _print_lock:
             printer.print_message(message, with_header=with_header)
         conn.sendall(b"OK\n")

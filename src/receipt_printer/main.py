@@ -15,7 +15,7 @@ def _cmd_print(args: argparse.Namespace) -> None:
     """Print an on-demand message, routing through the daemon if it is running."""
     if os.path.exists(ipc.SOCKET_PATH):
         try:
-            ipc.send_print_request(args.message)
+            ipc.send_print_request(args.message, with_header=not args.no_header)
             return
         except Exception as exc:
             print(f"ERROR: Daemon rejected print request — {exc}", file=sys.stderr)
